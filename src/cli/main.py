@@ -7,10 +7,20 @@ from src.common.config import Config
 from src.common.logging import configure_logging
 
 
+# Allowed output modes for CLI
+OUTPUT_MODES = ["json", "text", "table", "yaml"]
+
+
 def cli():
     parser = argparse.ArgumentParser(description="Agent Orchestrator CLI")
     parser.add_argument("--config", "-c", help="Path to config file")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose output")
+    parser.add_argument(
+        "--output", "-o",
+        choices=OUTPUT_MODES,
+        default="text",
+        help="Output mode (default: text)"
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
