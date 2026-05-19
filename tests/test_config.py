@@ -1,5 +1,6 @@
 import pytest
 from src.common.config import Config
+from src.common.errors import ConfigurationError
 
 
 class TestConfig:
@@ -31,6 +32,23 @@ class TestConfig:
         data = config.to_dict()
         assert data["key1"] == "value1"
         assert data["key2"] == "value2"
+
+    def test_env_override_case_collision(self, monkeypatch):
+        """Test that case-colliding environment overrides are detected.
+        
+        When both AO_APP_PORT and AO_app_port exist, they both normalize to 
+        'app.port', which should raise a ConfigurationError.
+        """
+        monkeypatch.setenv("AO_APP_PORT", "8080")
+        monkeypatch.setenv("AO_app_port", "9000")
+        
+        with pytest.raises(ConfigurationError) as exc_info:
+            Config()
+        
+        # Verify the error message contains both conflicting env vars
+        assert "AO_APP_PORT" in str(exc_info.value)
+        assert "AO_app_port" in str(exc_info.value)
+        assert "app.port" in str(exc_info.value)
 
 # 2019-02-01T18:58:35 update
 

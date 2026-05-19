@@ -4,6 +4,8 @@ import os
 import json
 from typing import Any, Dict, Optional
 
+from src.common.errors import ConfigurationError
+
 
 class Config:
     def __init__(self, config_path: Optional[str] = None):
@@ -18,10 +20,19 @@ class Config:
 
     def _load_env_overrides(self) -> None:
         prefix = "AO_"
+        seen_normalized_keys: Dict[str, str] = {}
         for key, value in os.environ.items():
             if key.startswith(prefix):
-                config_key = key[len(prefix):].lower().replace("_", ".")
-                self._set_nested(config_key, value)
+                # Normalize the key: remove prefix, lowercase, replace _ with .
+                normalized_key = key[len(prefix):].lower().replace("_", ".")
+                # Check for collision with previously seen normalized keys
+                if normalized_key in seen_normalized_keys:
+                    raise ConfigurationError(
+                        f"Environment variable collision: '{seen_normalized_keys[normalized_key]}' "
+                        f"and '{key}' both resolve to config key '{normalized_key}'"
+                    )
+                seen_normalized_keys[normalized_key] = key
+                self._set_nested(normalized_key, value)
 
     def _set_nested(self, key: str, value: Any) -> None:
         parts = key.split(".")
