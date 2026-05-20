@@ -3,6 +3,7 @@
 import argparse
 import sys
 
+from src.cli.output import print_data, print_error
 from src.common.config import Config
 from src.common.logging import configure_logging
 
@@ -35,14 +36,15 @@ def cli():
         configure_logging("INFO")
 
     if args.command == "init":
-        print(f"Initializing project: {args.name}")
+        print_data(f"Initializing project: {args.name}")
     elif args.command == "deploy":
-        print(f"Deploying agent from manifest: {args.manifest}")
+        print_data(f"Deploying agent from manifest: {args.manifest}")
     elif args.command == "status":
-        print("Checking agent status...")
+        print_data("Checking agent status...")
     elif args.command == "logs":
-        print(f"Fetching logs for agent: {args.agent_id}")
+        print_data(f"Fetching logs for agent: {args.agent_id}")
     else:
+        print_error("Error: No command specified")
         parser.print_help()
         sys.exit(1)
 

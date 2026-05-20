@@ -2,7 +2,9 @@
 
 from .main import cli
 
-__all__ = ["cli"]
+__all__ = ["cli", "print_data", "print_error", "print_data_json"]
+
+from .output import print_data, print_error, print_data_json
 
 # 2019-03-06T18:02:23 update
 
