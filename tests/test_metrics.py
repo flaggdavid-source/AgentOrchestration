@@ -31,6 +31,39 @@ class TestMetricsCollector:
         duration = self.metrics.stop_timer("operation")
         assert duration > 0.005
 
+    def test_stop_timer_no_deadlock(self):
+        """Regression test: stop_timer should not deadlock when calling observe.
+
+        The previous implementation called self.observe() while holding the lock,
+        which would cause a deadlock since Lock is not reentrant.
+        """
+        import threading
+        import time
+
+        # Start and stop timer in a separate thread to verify no deadlock
+        result = {"duration": None, "error": None}
+
+        def timer_thread():
+            try:
+                self.metrics.start_timer("test.operation")
+                time.sleep(0.01)
+                result["duration"] = self.metrics.stop_timer("test.operation")
+            except Exception as e:
+                result["error"] = str(e)
+
+        t = threading.Thread(target=timer_thread)
+        t.start()
+        t.join(timeout=5.0)  # 5 second timeout - should complete quickly
+
+        # Verify thread completed without deadlock
+        assert t.is_alive() is False, "Timer thread deadlocked"
+        assert result["error"] is None, f"Error occurred: {result['error']}"
+        assert result["duration"] > 0.005, "Duration should be positive"
+        
+        # Verify the duration was recorded in histograms
+        snapshot = self.metrics.snapshot()
+        assert snapshot["histograms"]["test.operation"]["count"] == 1
+
 # 2019-07-16T09:29:21 update
 
 # 2019-09-09T13:35:42 update

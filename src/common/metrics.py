@@ -34,7 +34,9 @@ class MetricsCollector:
         with self._lock:
             if metric in self._timers:
                 duration = time.time() - self._timers.pop(metric)
-                self.observe(metric, duration)
+                # Append directly to histogram under the same lock to avoid
+                # lock re-entry (observe would try to acquire the same Lock)
+                self._histograms[metric].append(duration)
                 return duration
         return 0.0
 
