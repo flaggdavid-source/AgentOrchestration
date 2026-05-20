@@ -1,5 +1,6 @@
 import pytest
-from src.common.config import Config
+from src.common.config import Config, MAX_CONFIG_FILE_SIZE
+from src.common.errors import ConfigurationError
 
 
 class TestConfig:
@@ -31,6 +32,30 @@ class TestConfig:
         data = config.to_dict()
         assert data["key1"] == "value1"
         assert data["key2"] == "value2"
+
+    def test_load_oversized_config_rejected(self, tmp_path):
+        """Test that oversized config files are rejected before parsing."""
+        config_file = tmp_path / "large_config.json"
+        # Create a file larger than MAX_CONFIG_FILE_SIZE
+        large_content = '{"key": "' + 'x' * (MAX_CONFIG_FILE_SIZE + 1) + '"}'
+        config_file.write_text(large_content)
+        
+        with pytest.raises(ConfigurationError) as exc_info:
+            Config(str(config_file))
+        
+        assert "exceeds maximum size limit" in str(exc_info.value)
+
+    def test_load_config_at_max_size(self, tmp_path):
+        """Test that config files at exactly max size are allowed."""
+        config_file = tmp_path / "max_size_config.json"
+        # Create a file exactly at MAX_CONFIG_FILE_SIZE
+        # We need to account for the JSON overhead, so create slightly less
+        content = '{"key": "' + 'x' * (MAX_CONFIG_FILE_SIZE - 20) + '"}'
+        config_file.write_text(content)
+        
+        # Should not raise
+        config = Config(str(config_file))
+        assert config.get("key") is not None
 
 # 2019-02-01T18:58:35 update
 
