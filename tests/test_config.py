@@ -1,5 +1,6 @@
 import pytest
 from src.common.config import Config
+from src.common.errors import ConfigurationError
 
 
 class TestConfig:
@@ -31,6 +32,20 @@ class TestConfig:
         data = config.to_dict()
         assert data["key1"] == "value1"
         assert data["key2"] == "value2"
+
+    def test_load_malformed_json_provides_path_context(self, tmp_path):
+        """Test that malformed JSON raises ConfigurationError with file path context."""
+        config_file = tmp_path / "bad_config.json"
+        # Invalid JSON: missing closing brace
+        config_file.write_text('{"app": {"name": "test"')
+        
+        with pytest.raises(ConfigurationError) as exc_info:
+            Config(str(config_file))
+        
+        error_message = str(exc_info.value)
+        assert "bad_config.json" in error_message
+        assert "line" in error_message.lower()
+        assert "column" in error_message.lower()
 
 # 2019-02-01T18:58:35 update
 

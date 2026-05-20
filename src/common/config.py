@@ -2,7 +2,10 @@
 
 import os
 import json
+from json import JSONDecodeError
 from typing import Any, Dict, Optional
+
+from src.common.errors import ConfigurationError
 
 
 class Config:
@@ -13,8 +16,14 @@ class Config:
         self._load_env_overrides()
 
     def load(self, path: str) -> None:
-        with open(path) as f:
-            self._data = json.load(f)
+        try:
+            with open(path) as f:
+                self._data = json.load(f)
+        except JSONDecodeError as e:
+            raise ConfigurationError(
+                f"Failed to parse JSON config file '{path}': "
+                f"line {e.lineno}, column {e.colno} (position {e.pos}): {e.msg}"
+            )
 
     def _load_env_overrides(self) -> None:
         prefix = "AO_"
