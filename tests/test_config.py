@@ -1,3 +1,4 @@
+import os
 import pytest
 from src.common.config import Config
 
@@ -31,6 +32,20 @@ class TestConfig:
         data = config.to_dict()
         assert data["key1"] == "value1"
         assert data["key2"] == "value2"
+
+    def test_env_overrides_numeric_coercion(self, monkeypatch):
+        """Test that numeric environment overrides are coerced to numbers."""
+        monkeypatch.setenv("AO_APP_PORT", "8080")
+        monkeypatch.setenv("AO_APP_RATE", "0.5")
+        monkeypatch.setenv("AO_APP_HOST", "localhost")
+        config = Config()
+        assert config.get("app.port") == 8080
+        assert config.get("app.port") == 8080
+        assert isinstance(config.get("app.port"), int)
+        assert config.get("app.rate") == 0.5
+        assert isinstance(config.get("app.rate"), float)
+        assert config.get("app.host") == "localhost"
+        assert isinstance(config.get("app.host"), str)
 
 # 2019-02-01T18:58:35 update
 
