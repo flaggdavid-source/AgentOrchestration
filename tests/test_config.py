@@ -1,3 +1,4 @@
+import os
 import pytest
 from src.common.config import Config
 
@@ -31,6 +32,20 @@ class TestConfig:
         data = config.to_dict()
         assert data["key1"] == "value1"
         assert data["key2"] == "value2"
+
+    def test_case_colliding_env_overrides(self, monkeypatch):
+        """Test that case-colliding environment overrides are detected."""
+        # Set up both AO_APP_PORT and AO_app_port (which both normalize to app.port)
+        monkeypatch.setenv("AO_APP_PORT", "8080")
+        monkeypatch.setenv("AO_app_port", "9090")
+        
+        with pytest.raises(ValueError) as exc_info:
+            Config()
+        
+        assert "Case-colliding environment override detected" in str(exc_info.value)
+        assert "AO_APP_PORT" in str(exc_info.value)
+        assert "AO_app_port" in str(exc_info.value)
+        assert "app.port" in str(exc_info.value)
 
 # 2019-02-01T18:58:35 update
 

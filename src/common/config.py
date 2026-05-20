@@ -18,9 +18,18 @@ class Config:
 
     def _load_env_overrides(self) -> None:
         prefix = "AO_"
+        seen_normalized_keys: Dict[str, str] = {}
         for key, value in os.environ.items():
             if key.startswith(prefix):
                 config_key = key[len(prefix):].lower().replace("_", ".")
+                # Detect case-colliding environment overrides
+                if config_key in seen_normalized_keys:
+                    original_key = seen_normalized_keys[config_key]
+                    raise ValueError(
+                        f"Case-colliding environment override detected: "
+                        f"'{original_key}' and '{key}' both map to config key '{config_key}'"
+                    )
+                seen_normalized_keys[config_key] = key
                 self._set_nested(config_key, value)
 
     def _set_nested(self, key: str, value: Any) -> None:
