@@ -31,6 +31,49 @@ class TestMetricsCollector:
         duration = self.metrics.stop_timer("operation")
         assert duration > 0.005
 
+    def test_timer_no_deadlock(self):
+        """Regression test: stop_timer should not re-enter the same lock.
+
+        This test verifies that stop_timer does not cause a deadlock when
+        calling observe internally, as both methods acquire the same lock.
+        """
+        import time
+        import threading
+
+        # Start and stop multiple timers to ensure no deadlock occurs
+        for i in range(10):
+            self.metrics.start_timer(f"operation_{i}")
+            time.sleep(0.001)
+            duration = self.metrics.stop_timer(f"operation_{i}")
+            assert duration > 0
+
+        # Verify the histograms were recorded correctly
+        snapshot = self.metrics.snapshot()
+        assert snapshot["histograms"]["operation_0"]["count"] == 1
+
+    def test_timer_concurrent(self):
+        """Test that timers work correctly under concurrent access."""
+        import time
+        import threading
+
+        results = []
+
+        def timer_worker(worker_id):
+            self.metrics.start_timer(f"concurrent_{worker_id}")
+            time.sleep(0.01)
+            duration = self.metrics.stop_timer(f"concurrent_{worker_id}")
+            results.append(duration)
+
+        threads = [threading.Thread(target=timer_worker, args=(i,)) for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == 5
+        for duration in results:
+            assert duration > 0
+
 # 2019-07-16T09:29:21 update
 
 # 2019-09-09T13:35:42 update
