@@ -1,8 +1,47 @@
 """Workflow Manager — Defines and executes multi-step agent workflows."""
 
+import logging
+import time
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
+
+
+class CompensatingState(Enum):
+    """Tracks whether a workflow is in compensation/rollback mode."""
+    IDLE = "idle"
+    ROLLING_BACK = "rolling_back"
+    COMPLIANT = "compliant"  # Safe to proceed
+
+
+class CompensationAction:
+    """Represents a compensating action (rollback handler)."""
+    
+    def __init__(self, name: str, handler: Callable, target_step_id: Optional[str] = None):
+        self.id = str(uuid4())
+        self.name = name
+        self.handler = handler
+        self.target_step_id = target_step_id
+        self.executed = False
+        self.executed_at: Optional[float] = None
+        self.success = False
+    
+    def execute(self) -> bool:
+        """Execute the compensation action and track result."""
+        try:
+            self.handler()
+            self.success = True
+            self.executed = True
+            self.executed_at = time.time()
+            return True
+        except Exception as e:
+            logger.error(f"Compensation action {self.name} failed: {e}")
+            self.executed = True
+            self.executed_at = time.time()
+            self.success = False
+            return False
 
 
 class StepStatus(Enum):
@@ -33,6 +72,9 @@ class Workflow:
         self.steps: List[WorkflowStep] = []
         self._step_map: Dict[str, WorkflowStep] = {}
         self.status = StepStatus.PENDING
+        self._compensation_state = CompensatingState.IDLE
+        self._compensation_actions: List[CompensationAction] = []
+        self._rollback_history: List[Dict[str, Any]] = []
 
     def add_step(self, step: WorkflowStep) -> "Workflow":
         self.steps.append(step)
@@ -41,6 +83,53 @@ class Workflow:
 
     def get_step(self, step_id: str) -> Optional[WorkflowStep]:
         return self._step_map.get(step_id)
+    
+    def add_compensation(self, action: CompensationAction) -> None:
+        """Add a compensation action for rollback."""
+        self._compensation_actions.append(action)
+    
+    def get_compensation_state(self) -> CompensatingState:
+        """Get the current compensation state."""
+        return self._compensation_state
+    
+    def set_compensation_state(self, state: CompensatingState, reason: str = "") -> None:
+        """Set the compensation state with audit log."""
+        old_state = self._compensation_state
+        self._compensation_state = state
+        logger.info(
+            f"Workflow {self.id} compensation state changed: {old_state.value} -> {state.value}. "
+            f"Reason: {reason}"
+        )
+    
+    def validate_transition(self, target_status: StepStatus) -> tuple[bool, str]:
+        """
+        Validate if a state transition is allowed given the compensation state.
+        
+        Returns (allowed, reason) tuple. If not allowed, reason explains why.
+        """
+        if self._compensation_state == CompensatingState.ROLLING_BACK:
+            if target_status in (StepStatus.RUNNING, StepStatus.COMPLETED):
+                return (
+                    False,
+                    f"Cannot transition to {target_status.value}: workflow is in rollback state"
+                )
+        return (True, "")
+    
+    def record_rollback(self, step_id: str, success: bool, error: Optional[str] = None) -> None:
+        """Record a rollback attempt in history."""
+        self._rollback_history.append({
+            "step_id": step_id,
+            "timestamp": time.time(),
+            "success": success,
+            "error": error
+        })
+    
+    def can_proceed(self) -> bool:
+        """Check if workflow can proceed to next step."""
+        # Check compensation state is compliant
+        if self._compensation_state == CompensatingState.ROLLING_BACK:
+            return False
+        return True
 
 
 class WorkflowManager:
@@ -62,25 +151,77 @@ class WorkflowManager:
         return self._workflows.pop(workflow_id, None) is not None
 
     def execute_workflow(self, workflow_id: str) -> bool:
+        """
+        Execute a workflow with compensation validation.
+        
+        Validates compensation state before allowing state transitions.
+        Raises CompensationValidationError if transition violates invariants.
+        """
         workflow = self._workflows.get(workflow_id)
         if not workflow:
             return False
-
+        
+        # Validate: Check if we can proceed given compensation state
+        allowed, reason = workflow.validate_transition(StepStatus.RUNNING)
+        if not allowed:
+            logger.error(
+                f"Workflow {workflow_id} transition blocked: {reason}"
+            )
+            from src.common.errors import CompensationValidationError
+            raise CompensationValidationError(workflow_id, reason)
+        
         workflow.status = StepStatus.RUNNING
+        
+        # Track completed steps for potential rollback
+        completed_steps = []
         for step in workflow.steps:
+            # Validate each step transition
+            allowed, reason = workflow.validate_transition(StepStatus.RUNNING)
+            if not allowed:
+                # Trigger rollback for completed steps
+                self._trigger_rollback(workflow, completed_steps)
+                logger.error(
+                    f"Workflow {workflow_id} step blocked: {reason}"
+                )
+                from src.common.errors import CompensationValidationError
+                raise CompensationValidationError(workflow_id, f"Step {step.name}: {reason}")
+            
             step.status = StepStatus.RUNNING
             try:
                 result = step.handler()
                 step.result = result
                 step.status = StepStatus.COMPLETED
+                completed_steps.append(step.id)
             except Exception as e:
                 step.error = str(e)
                 step.status = StepStatus.FAILED
                 workflow.status = StepStatus.FAILED
+                # Trigger rollback for previously completed steps
+                self._trigger_rollback(workflow, completed_steps)
                 return False
 
         workflow.status = StepStatus.COMPLETED
+        # Mark as compliant - all compensation actions completed successfully
+        workflow.set_compensation_state(CompensatingState.COMPLIANT, "All steps completed successfully")
         return True
+
+    def _trigger_rollback(self, workflow: Workflow, completed_step_ids: List[str]) -> None:
+        """Trigger rollback for completed steps using compensation actions."""
+        workflow.set_compensation_state(
+            CompensatingState.ROLLING_BACK,
+            f"Initiating rollback for {len(completed_step_ids)} steps"
+        )
+        
+        # Execute compensation actions in reverse order
+        for comp_action in reversed(workflow._compensation_actions):
+            # Find the corresponding completed step
+            if comp_action.target_step_id in completed_step_ids:
+                success = comp_action.execute()
+                workflow.record_rollback(
+                    comp_action.target_step_id,
+                    success,
+                    None if success else "Compensation action failed"
+                )
 
 # 2019-03-27T19:58:07 update
 

@@ -41,6 +41,13 @@ class ResourceExhaustedError(AgentOrchestratorError):
     def __init__(self, resource: str):
         super().__init__(f"Resource exhausted: {resource}")
 
+
+class CompensationValidationError(AgentOrchestratorError):
+    """Raised when a state transition violates compensating actions invariant."""
+    def __init__(self, workflow_id: str, message: str):
+        super().__init__(f"Workflow {workflow_id}: {message}")
+        self.workflow_id = workflow_id
+
 # 2019-01-25T13:21:06 update
 
 # 2019-02-15T19:31:32 update
