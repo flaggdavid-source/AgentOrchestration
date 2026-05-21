@@ -1,0 +1,132 @@
+name: Package Publishing
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 1.0.0)'
+        required: true
+        type: string
+      ref:
+        description: 'Git ref to publish from'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  # Pre-authentication check: Verify ref is protected or is a signed tag
+  check-protected-ref:
+    runs-on: ubuntu-latest
+    outputs:
+      can_publish: ${{ steps.check_ref.outputs.can_publish }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Check ref protection
+        id: check_ref
+        env:
+          REF: ${{ github.event.inputs.ref || github.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Determine the actual ref to check
+          if [ -z "$REF" ]; then
+            REF="${{ github.ref }}"
+          fi
+          
+          echo "Checking ref: $REF"
+          
+          # Check if ref is a tag
+          if [[ "$REF" == refs/tags/* ]]; then
+            TAG_NAME="${REF#refs/tags/}"
+            echo "Checking tag: $TAG_NAME"
+            
+            # Verify tag is signed using git
+            if git tag -v "$TAG_NAME" 2>&1; then
+              echo "can_publish=true" >> $GITHUB_OUTPUT
+              echo "Ref is a signed tag: $TAG_NAME"
+              exit 0
+            else
+              echo "can_publish=false" >> $GITHUB_OUTPUT
+              echo "::error::Tag $TAG_NAME is not signed"
+              exit 1
+            fi
+          fi
+          
+          # Check if ref is a protected branch
+          # Use GitHub API to check protected branches
+          BRANCH_NAME="${REF#refs/heads/}"
+          echo "Checking branch: $BRANCH_NAME"
+          
+          # Get branch protection info using GitHub API
+          PROTECTION_INFO=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/branches/$BRANCH_NAME/protection")
+          
+          # Check if branch is protected
+          if echo "$PROTECTION_INFO" | grep -q '"protected":true'; then
+            echo "can_publish=true" >> $GITHUB_OUTPUT
+            echo "Branch $BRANCH_NAME is protected"
+            exit 0
+          fi
+          
+          # Check if it's the default branch (usually protected)
+          DEFAULT_BRANCH=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO" | grep -o '"default_branch":"[^"]*"' | cut -d'"' -f4)
+          
+          if [ "$BRANCH_NAME" = "$DEFAULT_BRANCH" ]; then
+            echo "can_publish=true" >> $GITHUB_OUTPUT
+            echo "Branch $BRANCH_NAME is the default branch"
+            exit 0
+          fi
+          
+          # Ref is not protected and not a signed tag
+          echo "can_publish=false" >> $GITHUB_OUTPUT
+          echo "::error::Ref $REF is not protected and not a signed tag"
+          echo "::error::Publishing is only allowed from protected branches or signed tags"
+          exit 1
+
+  publish:
+    needs: check-protected-ref
+    if: needs.check-protected-ref.outputs.can_publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Build package
+        run: uv build
+
+      # NOTE: This is a template for package publishing
+      # Replace with actual registry publishing steps (e.g., PyPI, npm, etc.)
+      # Example for PyPI:
+      # - name: Publish to PyPI
+      #   if: github.event.inputs.version != ''
+      #   env:
+      #     PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+      #   run: |
+      #     uv publish --token $PYPI_TOKEN
+
+      - name: Verify version
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          echo "Publishing version: $VERSION"
+          # Add version validation logic here
