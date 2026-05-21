@@ -31,6 +31,43 @@ class TestMetricsCollector:
         duration = self.metrics.stop_timer("operation")
         assert duration > 0.005
 
+    def test_timer_no_deadlock(self):
+        """Regression test: stop_timer should not deadlock when calling observe().
+        
+        This test verifies that timer recording does not re-enter the same
+        non-reentrant lock, which was a bug in the original implementation.
+        """
+        import time
+        import threading
+        
+        results = []
+        
+        # Start and stop multiple timers concurrently to stress test
+        def start_and_stop(thread_id):
+            for i in range(10):
+                # Use unique timer key per thread to avoid race conditions
+                timer_key = f"op_{thread_id}_{i}"
+                self.metrics.start_timer(timer_key)
+                time.sleep(0.001)
+                duration = self.metrics.stop_timer(timer_key)
+                results.append(duration)
+        
+        threads = [threading.Thread(target=start_and_stop, args=(i,)) for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)  # 5 second timeout to detect deadlock
+        
+        # If we get here, no deadlock occurred
+        # Verify timers were recorded correctly
+        assert len(results) == 50
+        assert all(d > 0 for d in results)
+        
+        # Verify histograms have correct counts
+        snapshot = self.metrics.snapshot()
+        total_histogram_count = sum(h["count"] for h in snapshot["histograms"].values())
+        assert total_histogram_count == 50
+
 # 2019-07-16T09:29:21 update
 
 # 2019-09-09T13:35:42 update
