@@ -10,6 +10,33 @@ class TestConfig:
         assert config.get("app.name") == "test"
         assert config.get("app.port") == 8080
 
+    def test_load_yaml_config(self, tmp_path):
+        """Test loading a YAML configuration file."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text('app:\n  name: test-yaml\n  port: 9090\ndatabase:\n  host: localhost\n  port: 5432')
+        config = Config(str(config_file))
+        assert config.get("app.name") == "test-yaml"
+        assert config.get("app.port") == 9090
+        assert config.get("database.host") == "localhost"
+        assert config.get("database.port") == 5432
+
+    def test_load_yml_config(self, tmp_path):
+        """Test loading a .yml configuration file."""
+        config_file = tmp_path / "config.yml"
+        config_file.write_text('service:\n  enabled: true\n  timeout: 30')
+        config = Config(str(config_file))
+        assert config.get("service.enabled") is True
+        assert config.get("service.timeout") == 30
+
+    def test_load_unsupported_config(self, tmp_path):
+        """Test that unsupported file formats raise a clear error."""
+        config_file = tmp_path / "config.xml"
+        config_file.write_text('<config><app>test</app></config>')
+        with pytest.raises(ValueError) as exc_info:
+            Config(str(config_file))
+        assert "Unsupported config file format" in str(exc_info.value)
+        assert ".xml" in str(exc_info.value)
+
     def test_default_value(self):
         config = Config()
         assert config.get("nonexistent.key", "default") == "default"

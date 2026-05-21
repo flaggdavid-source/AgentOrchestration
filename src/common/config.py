@@ -4,6 +4,8 @@ import os
 import json
 from typing import Any, Dict, Optional
 
+import yaml
+
 
 class Config:
     def __init__(self, config_path: Optional[str] = None):
@@ -13,8 +15,29 @@ class Config:
         self._load_env_overrides()
 
     def load(self, path: str) -> None:
+        """Load configuration from a file.
+        
+        Supports JSON (.json) and YAML (.yaml, .yml) files.
+        
+        Args:
+            path: Path to the configuration file.
+            
+        Raises:
+            ValueError: If the file extension is not supported.
+            FileNotFoundError: If the file does not exist.
+        """
+        ext = os.path.splitext(path)[1].lower()
+        
         with open(path) as f:
-            self._data = json.load(f)
+            if ext in ('.yaml', '.yml'):
+                self._data = yaml.safe_load(f) or {}
+            elif ext == '.json':
+                self._data = json.load(f)
+            else:
+                raise ValueError(
+                    f"Unsupported config file format: '{ext}'. "
+                    f"Supported formats: .json, .yaml, .yml"
+                )
 
     def _load_env_overrides(self) -> None:
         prefix = "AO_"
