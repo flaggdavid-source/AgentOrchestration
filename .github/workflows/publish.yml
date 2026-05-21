@@ -1,0 +1,154 @@
+name: Package Registry Publish
+
+"on":
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., v1.0.0)'
+        required: true
+        type: string
+      ref:
+        description: 'Git ref to publish from (branch or tag)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  validate-ref:
+    name: Validate protected ref
+    runs-on: ubuntu-latest
+    outputs:
+      ref_type: ${{ steps.check-ref.outputs.ref_type }}
+      is_protected: ${{ steps.check-ref.outputs.is_protected }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Determine ref and check protection
+        id: check-ref
+        env:
+          REF: ${{ github.event.inputs.ref || github.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Determine the actual ref being used
+          if [ -n "$REF" ]; then
+            ACTUAL_REF="$REF"
+          else
+            ACTUAL_REF="${{ github.ref }}"
+          fi
+          
+          echo "Checking ref: $ACTUAL_REF"
+          
+          # Check if it's a tag (starts with refs/tags/)
+          if [[ "$ACTUAL_REF" == refs/tags/* ]]; then
+            TAG_NAME="${ACTUAL_REF#refs/tags/}"
+            echo "ref_type=tag" >> $GITHUB_OUTPUT
+            echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+            
+            # Check if tag is signed using GPG
+            if git tag -v "$TAG_NAME" 2>/dev/null; then
+              echo "is_protected=true" >> $GITHUB_OUTPUT
+              echo "Tag $TAG_NAME is signed"
+            else
+              echo "is_protected=false" >> $GITHUB_OUTPUT
+              echo "Tag $TAG_NAME is NOT signed"
+              exit 1
+            fi
+          # Check if it's a branch
+          elif [[ "$ACTUAL_REF" == refs/heads/* ]]; then
+            BRANCH_NAME="${ACTUAL_REF#refs/heads/}"
+            echo "ref_type=branch" >> $GITHUB_OUTPUT
+            echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+            
+            # Check if branch is protected via GitHub API
+            PROTECTED=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/$REPO/branches/$BRANCH_NAME" | \
+              jq -r '.protected // false')
+            
+            if [ "$PROTECTED" = "true" ]; then
+              echo "is_protected=true" >> $GITHUB_OUTPUT
+              echo "Branch $BRANCH_NAME is protected"
+            else
+              echo "is_protected=false" >> $GITHUB_OUTPUT
+              echo "Branch $BRANCH_NAME is NOT protected"
+              exit 1
+            fi
+          else
+            # Direct ref (like main, develop, or a tag without refs/tags/ prefix)
+            echo "Checking direct ref: $ACTUAL_REF"
+            
+            # First try as branch
+            BRANCH_PROTECTED=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/$REPO/branches/$ACTUAL_REF" | \
+              jq -r '.protected // false')
+            
+            if [ "$BRANCH_PROTECTED" = "true" ]; then
+              echo "ref_type=branch" >> $GITHUB_OUTPUT
+              echo "is_protected=true" >> $GITHUB_OUTPUT
+              echo "Branch $ACTUAL_REF is protected"
+            else
+              # Try as tag - check if it exists and is signed
+              if git rev-parse "$ACTUAL_REF^{tag}" >/dev/null 2>&1; then
+                echo "ref_type=tag" >> $GITHUB_OUTPUT
+                if git tag -v "$ACTUAL_REF" 2>/dev/null; then
+                  echo "is_protected=true" >> $GITHUB_OUTPUT
+                  echo "Tag $ACTUAL_REF is signed"
+                else
+                  echo "is_protected=false" >> $GITHUB_OUTPUT
+                  echo "Tag $ACTUAL_REF is NOT signed"
+                  exit 1
+                fi
+              else
+                echo "ref_type=unknown" >> $GITHUB_OUTPUT
+                echo "is_protected=false" >> $GITHUB_OUTPUT
+                echo "Ref $ACTUAL_REF is neither a protected branch nor a signed tag"
+                exit 1
+              fi
+            fi
+          fi
+
+  publish:
+    name: Publish package
+    needs: validate-ref
+    runs-on: ubuntu-latest
+    if: needs.validate-ref.outputs.is_protected == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Validate version input
+        id: validate-version
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Invalid version format: $VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Build package
+        run: uv build
+
+      - name: Publish to registry
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          echo "Publishing from protected ref: ${{ needs.validate-ref.outputs.ref_type }}"
+          uv publish --token "$PYPI_TOKEN"
