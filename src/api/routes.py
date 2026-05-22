@@ -1,12 +1,17 @@
 """API route definitions."""
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi.responses import JSONResponse
 from typing import List, Dict, Optional
 
 from src.agent import AgentRegistry, AgentStatus
+from src.orchestrator.artifact_service import artifact_service
 
 router = APIRouter()
 registry = AgentRegistry()
+
+# Max body size for artifact uploads (10MB)
+MAX_ARTIFACT_SIZE = 10 * 1024 * 1024
 
 
 @router.get("/agents")
@@ -191,3 +196,99 @@ async def agent_count():
 # 2026-04-09T20:30:37 update
 
 # 2026-05-13T11:36:25 update
+
+
+# Artifact Ingestion Routes
+
+@router.post("/artifacts")
+async def upload_artifact(request: Request):
+    """Upload a new artifact with body size validation.
+    
+    The guard validates body size BEFORE any lookup or mutation.
+    """
+    # Read body content
+    content = await request.body()
+    body_size = len(content)
+    
+    # Validate body size BEFORE any service call (guard at route level)
+    if body_size > MAX_ARTIFACT_SIZE:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": f"Payload too large: {body_size} bytes exceeds maximum {MAX_ARTIFACT_SIZE}"}
+        )
+    
+    # Extract metadata from form or JSON
+    content_type = request.headers.get("Content-Type", "application/octet-stream")
+    name = request.query_params.get("name", "unnamed")
+    
+    try:
+        # This also validates body size internally before any lookup/mutation
+        artifact = artifact_service.upload_artifact(
+            artifact_id=None,
+            name=name,
+            content=content,
+            content_type=content_type,
+        )
+        return {"artifact_id": artifact["id"], "status": "uploaded", "size": artifact["size"]}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"detail": str(e)})
+
+
+@router.put("/artifacts/{artifact_id}")
+async def update_artifact(artifact_id: str, request: Request):
+    """Update an existing artifact with body size validation.
+    
+    The guard validates body size BEFORE any lookup or mutation.
+    """
+    # Read body content
+    content = await request.body()
+    body_size = len(content)
+    
+    # Validate body size BEFORE any service call (guard at route level)
+    if body_size > MAX_ARTIFACT_SIZE:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": f"Payload too large: {body_size} bytes exceeds maximum {MAX_ARTIFACT_SIZE}"}
+        )
+    
+    # Extract metadata
+    content_type = request.headers.get("Content-Type", "application/octet-stream")
+    name = request.query_params.get("name", "unnamed")
+    
+    try:
+        # This also validates body size internally before any lookup/mutation
+        artifact = artifact_service.upload_artifact(
+            artifact_id=artifact_id,
+            name=name,
+            content=content,
+            content_type=content_type,
+        )
+        return {"artifact_id": artifact["id"], "status": "updated", "size": artifact["size"]}
+    except ValueError as e:
+        error_msg = str(e)
+        if "not found" in error_msg:
+            return JSONResponse(status_code=404, content={"detail": error_msg})
+        return JSONResponse(status_code=400, content={"detail": error_msg})
+
+
+@router.get("/artifacts/{artifact_id}")
+async def get_artifact(artifact_id: str):
+    """Get an artifact by ID."""
+    artifact = artifact_service.get_artifact(artifact_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return artifact
+
+
+@router.get("/artifacts")
+async def list_artifacts():
+    """List all artifacts."""
+    return {"artifacts": artifact_service.list_artifacts()}
+
+
+@router.delete("/artifacts/{artifact_id}")
+async def delete_artifact(artifact_id: str):
+    """Delete an artifact by ID."""
+    if not artifact_service.delete_artifact(artifact_id):
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return {"status": "deleted"}
